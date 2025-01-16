@@ -204,7 +204,11 @@ Precompute digests to ensure layers are not uploaded that already exist on the d
 
 **--retry-times**
 
-The number of times to retry. Retry wait time will be exponentially increased based on the number of failed attempts.
+The number of times to retry.
+
+**--retry-delay**
+
+Fixed delay between retries. If not set (or set to 0s), retry wait time will be exponentially increased based on the number of failed attempts.
 
 **--src-username**
 

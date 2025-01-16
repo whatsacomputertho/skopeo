@@ -123,7 +123,13 @@ The passphare to use when signing with `--sign-by` or `--sign-by-sigstore-privat
 
 **--dest-registry-token** _Bearer token_ for accessing the destination registry.
 
-**--retry-times**  the number of times to retry, retry wait time will be exponentially increased based on the number of failed attempts.
+**--retry-times**
+
+The number of times to retry.
+
+**--retry-delay**
+
+Fixed delay between retries. If not set (or set to 0s), retry wait time will be exponentially increased based on the number of failed attempts.
 
 **--keep-going**
 If any errors occur during copying of images, those errors are logged and the process continues syncing rest of the images and finally fails at the end.

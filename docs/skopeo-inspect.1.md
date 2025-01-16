@@ -65,7 +65,11 @@ Registry token for accessing the registry.
 
 **--retry-times**
 
-The number of times to retry; retry wait time will be exponentially increased based on the number of failed attempts.
+The number of times to retry.
+
+**--retry-delay**
+
+Fixed delay between retries. If not set (or set to 0s), retry wait time will be exponentially increased based on the number of failed attempts.
 
 **--shared-blob-dir** _directory_
 
