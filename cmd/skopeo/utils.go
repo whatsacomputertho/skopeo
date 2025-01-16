@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	commonFlag "github.com/containers/common/pkg/flag"
 	"github.com/containers/common/pkg/retry"
@@ -184,6 +185,7 @@ func retryFlags() (pflag.FlagSet, *retry.Options) {
 	opts := retry.Options{}
 	fs := pflag.FlagSet{}
 	fs.IntVar(&opts.MaxRetry, "retry-times", 0, "the number of times to possibly retry")
+	fs.DurationVar(&opts.Delay, "retry-delay", 0*time.Second, "Fixed delay between retries. If not set, retry uses an exponential backoff delay.")
 	return fs, &opts
 }
 
