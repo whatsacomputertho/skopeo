@@ -7,7 +7,7 @@ go 1.22.8
 
 require (
 	github.com/Masterminds/semver/v3 v3.3.1
-	github.com/containers/common v0.61.1
+	github.com/containers/common v0.62.0
 	github.com/containers/image/v5 v5.34.0
 	github.com/containers/ocicrypt v1.2.1
 	github.com/containers/storage v1.57.1
@@ -20,7 +20,7 @@ require (
 	github.com/spf13/cobra v1.8.1
 	github.com/spf13/pflag v1.0.6
 	github.com/stretchr/testify v1.10.0
-	golang.org/x/exp v0.0.0-20241217172543-b2144cdd0a67
+	golang.org/x/exp v0.0.0-20250103183323-7d7fa50e5329
 	golang.org/x/term v0.28.0
 	gopkg.in/yaml.v3 v3.0.1
 )
