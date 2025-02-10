@@ -1,3 +1,3 @@
 ## The skopeo Project Community Code of Conduct
 
-The skopeo project follows the [Containers Community Code of Conduct](https://github.com/containers/common/blob/main/CODE-OF-CONDUCT.md).
+The skopeo project, as part of Podman Container Tools, follows the [CNCF Code of Conduct](https://github.com/cncf/foundation/blob/main/code-of-conduct.md).
