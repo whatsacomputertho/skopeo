@@ -10,7 +10,7 @@ require (
 	github.com/containers/common v0.62.1
 	github.com/containers/image/v5 v5.34.1
 	github.com/containers/ocicrypt v1.2.1
-	github.com/containers/storage v1.57.1
+	github.com/containers/storage v1.57.2
 	github.com/docker/distribution v2.8.3+incompatible
 	github.com/moby/sys/capability v0.4.0
 	github.com/opencontainers/go-digest v1.0.0
