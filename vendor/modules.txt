@@ -277,7 +277,7 @@ github.com/docker/go-connections/tlsconfig
 # github.com/docker/go-units v0.5.0
 ## explicit
 github.com/docker/go-units
-# github.com/dsnet/compress v0.0.2-0.20210315054119-f66993602bf5
+# github.com/dsnet/compress v0.0.2-0.20230904184137-39efe44ab707
 ## explicit; go 1.9
 # github.com/felixge/httpsnoop v1.0.4
 ## explicit; go 1.13
@@ -367,13 +367,10 @@ github.com/google/uuid
 # github.com/gorilla/mux v1.8.1
 ## explicit; go 1.20
 github.com/gorilla/mux
-# github.com/hashicorp/errwrap v1.1.0
-## explicit
-github.com/hashicorp/errwrap
 # github.com/hashicorp/go-cleanhttp v0.5.2
 ## explicit; go 1.13
 github.com/hashicorp/go-cleanhttp
-# github.com/hashicorp/go-multierror v1.1.1
+# github.com/hashicorp/go-multierror v1.1.2-0.20250313123807-1ee6e1a1957a
 ## explicit; go 1.13
 github.com/hashicorp/go-multierror
 # github.com/hashicorp/go-retryablehttp v0.7.7
