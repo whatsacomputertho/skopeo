@@ -2,7 +2,7 @@
 
 errors=$($GOBIN/golangci-lint run --build-tags "${BUILDTAGS}" 2>&1)
 
-if [ -z "$errors" ]; then
+if [ "$?" -eq 0 ]; then
 	echo 'Congratulations!  All Go source files have been linted.'
 else
 	{
