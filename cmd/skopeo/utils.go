@@ -200,8 +200,8 @@ func (opts *imageOptions) newSystemContext() (*types.SystemContext, error) {
 	ctx.AuthFilePath = opts.shared.authFilePath
 	ctx.DockerDaemonHost = opts.dockerDaemonHost
 	ctx.DockerDaemonCertPath = opts.dockerCertPath
-	if opts.dockerImageOptions.authFilePath.Present() {
-		ctx.AuthFilePath = opts.dockerImageOptions.authFilePath.Value()
+	if opts.authFilePath.Present() {
+		ctx.AuthFilePath = opts.authFilePath.Value()
 	}
 	if opts.deprecatedTLSVerify != nil && opts.deprecatedTLSVerify.tlsVerify.Present() {
 		// If both this deprecated option and a non-deprecated option is present, we use the latter value.
