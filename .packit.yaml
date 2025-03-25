@@ -102,27 +102,11 @@ jobs:
       failure_comment:
         message: "Tests failed. @containers/packit-build please check."
     targets: *fedora_copr_targets
-    require: &dev_branch
-      label:
-        absent:
-          - release
     tf_extra_params:
       environments:
         - artifacts:
           - type: repository-file
             id: https://copr.fedorainfracloud.org/coprs/rhcontainerbot/podman-next/repo/fedora-$releasever/rhcontainerbot-podman-next-fedora-$releasever.repo
-    identifier: "dev-fedora"
-
-  # Tests on Fedora for release branches
-  - job: tests
-    trigger: pull_request
-    packages: [skopeo-fedora]
-    targets: *fedora_copr_targets
-    require: &release_branch
-      label:
-        present:
-          - release
-    identifier: "release-fedora"
 
   # Tests on CentOS Stream for main branch
   - job: tests
@@ -130,22 +114,11 @@ jobs:
     packages: [skopeo-centos]
     notifications: *test_failure_notification
     targets: *centos_copr_targets
-    require: *dev_branch
     tf_extra_params:
       environments:
         - artifacts:
           - type: repository-file
             id: https://copr.fedorainfracloud.org/coprs/rhcontainerbot/podman-next/repo/centos-stream-$releasever/rhcontainerbot-podman-next-centos-stream-$releasever.repo
-    identifier: "dev-centos"
-
-  # Tests on CentOS Stream for release branches
-  - job: tests
-    trigger: pull_request
-    packages: [skopeo-centos]
-    notifications: *test_failure_notification
-    targets: *centos_copr_targets
-    require: *release_branch
-    identifier: "release-centos"
 
   # Sync to Fedora
   - job: propose_downstream
