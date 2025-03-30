@@ -277,7 +277,7 @@ func (h *proxyHandler) openImageImpl(args []any, allowNotFound bool) (retReplyBu
 	return ret, nil
 }
 
-// OpenImage accepts a string image reference i.e. TRANSPORT:REF - like `skopeo copy`.
+// OpenImageOptional accepts a string image reference i.e. TRANSPORT:REF - like `skopeo copy`.
 // The return value is an opaque integer handle.  If the image does not exist, zero
 // is returned.
 func (h *proxyHandler) OpenImageOptional(args []any) (replyBuf, error) {

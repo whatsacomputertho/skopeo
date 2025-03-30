@@ -154,7 +154,7 @@ func (cluster *openshiftCluster) prepareRegistryConfig(t *testing.T) {
 	require.Equal(t, "", string(out))
 }
 
-// startRegistry starts the OpenShift registry with configPart on port, waits for it to be ready, and returns the process object, or terminates on failure.
+// startRegistryProcess starts the OpenShift registry with configPart on port, waits for it to be ready, and returns the process object, or terminates on failure.
 func (cluster *openshiftCluster) startRegistryProcess(t *testing.T, port uint16, configPath string) *exec.Cmd {
 	cmd := cluster.clusterCmd(map[string]string{
 		"KUBECONFIG":          "openshift.local.registry/openshift-registry.kubeconfig",
