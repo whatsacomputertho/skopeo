@@ -1,17 +1,22 @@
 approvers:
-  - mtrmac
+  - baude
+  - giuseppe
   - lsm5
-  - TomSweeneyRedHat
+  - Luap99
+  - mheon
+  - mtrmac
+  - nalind
   - rhatdan
-  - vrothberg
+  - TomSweeneyRedHat
 reviewers:
   - ashley-cui
+  - baude
   - giuseppe
-  - containers/image-maintainers
   - lsm5
+  - Luap99
+  - mheon
   - mtrmac
-  - QiWang19
+  - nalind
   - rhatdan
-  - runcom
   - TomSweeneyRedHat
   - vrothberg
