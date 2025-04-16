@@ -62,7 +62,7 @@ doccheck_task:
         cpu: 4
         memory: 8
     env:
-        BUILDTAGS: &withopengpg 'libdm_no_deferred_remove containers_image_openpgp'
+        BUILDTAGS: &withopengpg 'containers_image_openpgp'
     script: |
       # TODO: Can't use 'runner.sh setup' inside container.  However,
       # removing the pre-installed package is the only necessary step
@@ -194,7 +194,7 @@ test_skopeo_task:
     matrix:
         - name: "Skopeo Test"  # N/B: Name ref. by hack/get_fqin.sh
           env:
-              BUILDTAGS: 'libdm_no_deferred_remove'
+              BUILDTAGS: ''
         - name: "Skopeo Test w/ opengpg"
           env:
               BUILDTAGS: *withopengpg
