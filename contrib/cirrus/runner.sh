@@ -128,7 +128,7 @@ _run_system() {
     make test-system-local BUILDTAGS="$BUILDTAGS"
 }
 
-req_env_vars SKOPEO_PATH BUILDTAGS
+req_env_vars SKOPEO_PATH
 
 handler="_run_${1}"
 if [ "$(type -t $handler)" != "function" ]; then
