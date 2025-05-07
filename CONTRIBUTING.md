@@ -148,9 +148,13 @@ When new PRs for [containers/image](https://github.com/containers/image) break `
 
 ## Communications
 
-For general questions, or discussions, please use the 
-IRC channel on `irc.libera.chat` called `#container-projects`
-that has been setup.
+For general questions, or discussions, please use the
+[#podman](https://app.slack.com/client/T08PSQ7BQ/C08MXJLCFCN) channel on the [CNCF
+Slack](https://cloud-native.slack.com).
+
+For development related discussions, please use the
+[#podman-dev](https://app.slack.com/client/T08PSQ7BQ/C08NTKCDC1W) channel on the CNCF
+Slack.
 
 For discussions around issues/bugs and features, you can use the github
 [issues](https://github.com/containers/skopeo/issues)
