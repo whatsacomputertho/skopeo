@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -60,8 +61,9 @@ type proxy struct {
 
 type pipefd struct {
 	// id is the remote identifier "pipeid"
-	id uint
-	fd *os.File
+	id     uint
+	datafd *os.File
+	errfd  *os.File
 }
 
 func (p *proxy) call(method string, args []any) (rval any, fd *pipefd, err error) {
@@ -99,26 +101,41 @@ func (p *proxy) call(method string, args []any) (rval any, fd *pipefd, err error
 		return
 	}
 
+	var scms []syscall.SocketControlMessage
+	scms, err = syscall.ParseSocketControlMessage(oob[:oobn])
+	if err != nil {
+		err = fmt.Errorf("failed to parse control message: %w", err)
+		return
+	}
 	if reply.PipeID > 0 {
-		var scms []syscall.SocketControlMessage
-		scms, err = syscall.ParseSocketControlMessage(oob[:oobn])
-		if err != nil {
-			err = fmt.Errorf("failed to parse control message: %w", err)
-			return
-		}
 		if len(scms) != 1 {
-			err = fmt.Errorf("Expected 1 received fd, found %d", len(scms))
+			err = fmt.Errorf("Expected 1 socket control message, found %d", len(scms))
 			return
 		}
+	}
+	if len(scms) > 2 {
+		err = fmt.Errorf("Expected 1 or 2 socket control message, found %d", len(scms))
+		return
+	}
+	if len(scms) != 0 {
 		var fds []int
 		fds, err = syscall.ParseUnixRights(&scms[0])
 		if err != nil {
 			err = fmt.Errorf("failed to parse unix rights: %w", err)
 			return
 		}
+		if len(fds) < 1 || len(fds) > 2 {
+			err = fmt.Errorf("expected 1 or 2 fds, found %d", len(fds))
+			return
+		}
+		var errfd *os.File
+		if len(fds) == 2 {
+			errfd = os.NewFile(uintptr(fds[1]), "errfd")
+		}
 		fd = &pipefd{
-			fd: os.NewFile(uintptr(fds[0]), "replyfd"),
-			id: uint(reply.PipeID),
+			datafd: os.NewFile(uintptr(fds[0]), "replyfd"),
+			id:     uint(reply.PipeID),
+			errfd:  errfd,
 		}
 	}
 
@@ -151,7 +168,7 @@ func (p *proxy) callReadAllBytes(method string, args []any) (rval any, buf []byt
 	}
 	fetchchan := make(chan byteFetch)
 	go func() {
-		manifestBytes, err := io.ReadAll(fd.fd)
+		manifestBytes, err := io.ReadAll(fd.datafd)
 		fetchchan <- byteFetch{
 			content: manifestBytes,
 			err:     err,
@@ -172,6 +189,80 @@ func (p *proxy) callReadAllBytes(method string, args []any) (rval any, buf []byt
 	case <-time.After(5 * time.Minute):
 		err = fmt.Errorf("timed out during proxy fetch")
 	}
+	return
+}
+
+type proxyError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+func (p *proxy) callGetRawBlob(args []any) (rval any, buf []byte, err error) {
+	var fd *pipefd
+	rval, fd, err = p.call("GetRawBlob", args)
+	if err != nil {
+		return
+	}
+	if fd == nil {
+		err = fmt.Errorf("Expected fds from method GetRawBlob")
+		return
+	}
+	if fd.errfd == nil {
+		err = fmt.Errorf("Expected errfd from method GetRawBlob")
+		return
+	}
+	var wg sync.WaitGroup
+	fetchchan := make(chan byteFetch, 1)
+	errchan := make(chan proxyError, 1)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer close(fetchchan)
+		defer fd.datafd.Close()
+		buf, err := io.ReadAll(fd.datafd)
+		fetchchan <- byteFetch{
+			content: buf,
+			err:     err,
+		}
+
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer fd.errfd.Close()
+		defer close(errchan)
+		buf, err := io.ReadAll(fd.errfd)
+		var proxyErr proxyError
+		if err != nil {
+			proxyErr.Code = "read-from-proxy"
+			proxyErr.Message = err.Error()
+			errchan <- proxyErr
+			return
+		}
+		// No error, leave code+message unset
+		if len(buf) == 0 {
+			return
+		}
+		unmarshalErr := json.Unmarshal(buf, &proxyErr)
+		// Shouldn't happen
+		if unmarshalErr != nil {
+			panic(unmarshalErr)
+		}
+		errchan <- proxyErr
+	}()
+	wg.Wait()
+
+	errMsg := <-errchan
+	if errMsg.Code != "" {
+		return nil, nil, fmt.Errorf("(%s) %s", errMsg.Code, errMsg.Message)
+	}
+	fetchRes := <-fetchchan
+	err = fetchRes.err
+	if err != nil {
+		return
+	}
+
+	buf = fetchRes.content
 	return
 }
 
@@ -348,7 +439,46 @@ func runTestOpenImageOptionalNotFound(p *proxy, img string) error {
 	return nil
 }
 
-func (s *proxySuite) TestProxy() {
+func runTestGetBlob(p *proxy, img string) error {
+	imgid, err := p.callNoFd("OpenImage", []any{img})
+	if err != nil {
+		return err
+	}
+
+	_, manifestBytes, err := p.callReadAllBytes("GetManifest", []any{imgid})
+	if err != nil {
+		return err
+	}
+	mfest, err := manifest.OCI1FromManifest(manifestBytes)
+	if err != nil {
+		return err
+	}
+
+	for _, layer := range mfest.Layers {
+		_, blobBytes, err := p.callGetRawBlob([]any{imgid, layer.Digest})
+		if err != nil {
+			return err
+		}
+		if len(blobBytes) != int(layer.Size) {
+			panic(fmt.Sprintf("Expected %d bytes, got %d", layer.Size, len(blobBytes)))
+		}
+	}
+
+	// echo "not a valid layer" | sha256sum
+	invalidDigest := "sha256:21a9aab5a3494674d2b4d8e7381c236a799384dd10545531014606cf652c119f"
+
+	_, blobBytes, err := p.callGetRawBlob([]any{imgid, invalidDigest})
+	if err == nil {
+		panic("Expected error fetching invalid blob")
+	}
+	if blobBytes != nil {
+		panic("Expected no bytes fetching invalid blob")
+	}
+
+	return nil
+}
+
+func (s *proxySuite) TestProxyMetadata() {
 	t := s.T()
 	p, err := newProxy()
 	require.NoError(t, err)
@@ -368,6 +498,18 @@ func (s *proxySuite) TestProxy() {
 	err = runTestOpenImageOptionalNotFound(p, knownNotExtantImage)
 	if err != nil {
 		err = fmt.Errorf("Testing optional image %s: %v", knownNotExtantImage, err)
+	}
+	assert.NoError(t, err)
+}
+
+func (s *proxySuite) TestProxyGetBlob() {
+	t := s.T()
+	p, err := newProxy()
+	require.NoError(t, err)
+
+	err = runTestGetBlob(p, knownListImage)
+	if err != nil {
+		err = fmt.Errorf("Testing GetBLob for %s: %v", knownListImage, err)
 	}
 	assert.NoError(t, err)
 }
