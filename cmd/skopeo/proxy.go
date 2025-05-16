@@ -897,6 +897,15 @@ func (h *proxyHandler) close() {
 // send writes a reply buffer to the socket
 func (buf replyBuf) send(conn *net.UnixConn, err error) error {
 	logrus.Debugf("Sending reply: err=%v value=%v pipeid=%v datafd=%v errfd=%v", err, buf.value, buf.pipeid, buf.fd, buf.errfd)
+	// We took ownership of these FDs, so close when we're done sending them or on error
+	defer func() {
+		if buf.fd != nil {
+			buf.fd.Close()
+		}
+		if buf.errfd != nil {
+			buf.errfd.Close()
+		}
+	}()
 	replyToSerialize := reply{
 		Success: err == nil,
 		Value:   buf.value,
@@ -910,15 +919,6 @@ func (buf replyBuf) send(conn *net.UnixConn, err error) error {
 	if err != nil {
 		return err
 	}
-	// We took ownership of these FDs, so close when we're done sending them or on error
-	defer func() {
-		if buf.fd != nil {
-			buf.fd.Close()
-		}
-		if buf.errfd != nil {
-			buf.errfd.Close()
-		}
-	}()
 	// Copy the FD number(s) to the socket ancillary buffer
 	fds := make([]int, 0)
 	if buf.fd != nil {
