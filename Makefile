@@ -92,7 +92,8 @@ MANPAGES ?= $(MANPAGES_MD:%.md=%)
 
 BTRFS_BUILD_TAG = $(shell hack/btrfs_installed_tag.sh)
 LIBSUBID_BUILD_TAG = $(shell hack/libsubid_tag.sh)
-LOCAL_BUILD_TAGS = $(BTRFS_BUILD_TAG) $(LIBSUBID_BUILD_TAG)
+SQLITE_BUILD_TAG = $(shell hack/sqlite_tag.sh)
+LOCAL_BUILD_TAGS = $(BTRFS_BUILD_TAG) $(LIBSUBID_BUILD_TAG) $(SQLITE_BUILD_TAG)
 BUILDTAGS += $(LOCAL_BUILD_TAGS)
 
 ifeq ($(DISABLE_CGO), 1)
