@@ -28,3 +28,7 @@ None at present
 ## Credits
 
 The structure of this document was based off of the equivalent one in the [CRI-O Project](https://github.com/cri-o/cri-o/blob/main/MAINTAINERS.md).
+
+## Note
+
+If there is a discrepancy between the [MAINTAINERS.md](https://github.com/containers/podman/blob/main/MAINTAINERS.md) file in the main Podman repository and this file regarding Core Maintainers or Community Managers, the file in the Podman Repository is considered the source of truth.
