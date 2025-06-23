@@ -6,8 +6,14 @@ prepare:
     - when: distro == centos-stream or distro == rhel
       how: shell
       script: |
-        dnf -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-$(rpm --eval '%{?rhel}').noarch.rpm
-        dnf -y config-manager --set-enabled epel
+        # Install bats
+        # https://bats-core.readthedocs.io/en/stable/installation.html
+        BATS_VERSION=1.12.0
+        curl -L https://github.com/bats-core/bats-core/archive/refs/tags/v"$BATS_VERSION".tar.gz | tar -xz
+        pushd bats-core-"$BATS_VERSION"
+        ./install.sh /usr
+        popd
+        rm -rf bats-core-"$BATS_VERSION"
       order: 10
     - when: initiator == packit
       how: shell
