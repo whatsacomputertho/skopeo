@@ -1,5 +1,4 @@
 require:
-    - bats
     - skopeo-tests
 
 environment:
