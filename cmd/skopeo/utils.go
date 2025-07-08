@@ -176,9 +176,9 @@ func imageFlags(global *globalOptions, shared *sharedImageOptions, deprecatedTLS
 	dockerFlags, opts := dockerImageFlags(global, shared, deprecatedTLSVerify, flagPrefix, credsOptionAlias)
 
 	fs := pflag.FlagSet{}
+	fs.AddFlagSet(&dockerFlags)
 	fs.StringVar(&opts.sharedBlobDir, flagPrefix+"shared-blob-dir", "", "`DIRECTORY` to use to share blobs across OCI repositories")
 	fs.StringVar(&opts.dockerDaemonHost, flagPrefix+"daemon-host", "", "use docker daemon host at `HOST` (docker-daemon: only)")
-	fs.AddFlagSet(&dockerFlags)
 	return fs, opts
 }
 

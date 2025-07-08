@@ -29,8 +29,8 @@ func loginCmd(global *globalOptions) *cobra.Command {
 	}
 	adjustUsage(cmd)
 	flags := cmd.Flags()
-	commonFlag.OptionalBoolFlag(flags, &opts.tlsVerify, "tls-verify", "require HTTPS and verify certificates when accessing the registry")
 	flags.AddFlagSet(auth.GetLoginFlags(&opts.loginOpts))
+	commonFlag.OptionalBoolFlag(flags, &opts.tlsVerify, "tls-verify", "require HTTPS and verify certificates when accessing the registry")
 	return cmd
 }
 

@@ -113,6 +113,11 @@ See skopeo-sync(1) for details.
 	}
 	adjustUsage(cmd)
 	flags := cmd.Flags()
+	flags.AddFlagSet(&sharedFlags)
+	flags.AddFlagSet(&deprecatedTLSVerifyFlags)
+	flags.AddFlagSet(&srcFlags)
+	flags.AddFlagSet(&destFlags)
+	flags.AddFlagSet(&retryFlags)
 	flags.BoolVar(&opts.removeSignatures, "remove-signatures", false, "Do not copy signatures from SOURCE images")
 	flags.StringVar(&opts.signByFingerprint, "sign-by", "", "Sign the image using a GPG key with the specified `FINGERPRINT`")
 	flags.StringVar(&opts.signBySigstoreParamFile, "sign-by-sigstore", "", "Sign the image using a sigstore parameter file at `PATH`")
@@ -128,11 +133,6 @@ See skopeo-sync(1) for details.
 	flags.BoolVar(&opts.dryRun, "dry-run", false, "Run without actually copying data")
 	flags.BoolVar(&opts.preserveDigests, "preserve-digests", false, "Preserve digests of images and lists")
 	flags.BoolVarP(&opts.keepGoing, "keep-going", "", false, "Do not abort the sync if any image copy fails")
-	flags.AddFlagSet(&sharedFlags)
-	flags.AddFlagSet(&deprecatedTLSVerifyFlags)
-	flags.AddFlagSet(&srcFlags)
-	flags.AddFlagSet(&destFlags)
-	flags.AddFlagSet(&retryFlags)
 	return cmd
 }
 
