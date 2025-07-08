@@ -16,9 +16,9 @@ const (
 	// fixturesTestImageManifestDigest is the Docker manifest digest of "image.manifest.json"
 	fixturesTestImageManifestDigest = digest.Digest("sha256:20bf21ed457b390829cdbeec8795a7bea1626991fda603e0d01b4e7f60427e55")
 	// fixturesTestKeyFingerprint is the fingerprint of the private key.
-	fixturesTestKeyFingerprint = "1D8230F6CDB6A06716E414C1DB72F2188BB46CC8"
+	fixturesTestKeyFingerprint = "08CD26E446E2E95249B7A405E932F44B23E8DD43"
 	// fixturesTestKeyFingerprint is the key ID of the private key.
-	fixturesTestKeyShortID = "DB72F2188BB46CC8"
+	fixturesTestKeyShortID = "E932F44B23E8DD43"
 )
 
 // Test that results of runSkopeo failed with nothing on stdout, and substring
