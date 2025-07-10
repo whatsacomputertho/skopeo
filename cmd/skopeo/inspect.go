@@ -57,13 +57,13 @@ skopeo inspect --format "Name: {{.Name}} Digest: {{.Digest}}" docker://registry.
 	}
 	adjustUsage(cmd)
 	flags := cmd.Flags()
+	flags.AddFlagSet(&sharedFlags)
+	flags.AddFlagSet(&imageFlags)
+	flags.AddFlagSet(&retryFlags)
 	flags.BoolVar(&opts.raw, "raw", false, "output raw manifest or configuration")
 	flags.BoolVar(&opts.config, "config", false, "output configuration")
 	flags.StringVarP(&opts.format, "format", "f", "", "Format the output to a Go template")
 	flags.BoolVarP(&opts.doNotListTags, "no-tags", "n", false, "Do not list the available tags from the repository in the output")
-	flags.AddFlagSet(&sharedFlags)
-	flags.AddFlagSet(&imageFlags)
-	flags.AddFlagSet(&retryFlags)
 	return cmd
 }
 

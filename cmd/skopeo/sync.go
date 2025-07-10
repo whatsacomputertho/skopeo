@@ -14,16 +14,12 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
-	commonFlag "github.com/containers/common/pkg/flag"
 	"github.com/containers/common/pkg/retry"
 	"github.com/containers/image/v5/copy"
 	"github.com/containers/image/v5/directory"
 	"github.com/containers/image/v5/docker"
 	"github.com/containers/image/v5/docker/reference"
 	"github.com/containers/image/v5/manifest"
-	"github.com/containers/image/v5/pkg/cli"
-	"github.com/containers/image/v5/pkg/cli/sigstore"
-	"github.com/containers/image/v5/signature/signer"
 	"github.com/containers/image/v5/transports"
 	"github.com/containers/image/v5/types"
 	"github.com/opencontainers/go-digest"
@@ -34,26 +30,20 @@ import (
 
 // syncOptions contains information retrieved from the skopeo sync command line.
 type syncOptions struct {
-	global                   *globalOptions // Global (not command dependent) skopeo options
-	deprecatedTLSVerify      *deprecatedTLSVerifyOption
-	srcImage                 *imageOptions     // Source image options
-	destImage                *imageDestOptions // Destination image options
-	retryOpts                *retry.Options
-	removeSignatures         bool                      // Do not copy signatures from the source image
-	signByFingerprint        string                    // Sign the image using a GPG key with the specified fingerprint
-	signBySigstoreParamFile  string                    // Sign the image using a sigstore signature per configuration in a param file
-	signBySigstorePrivateKey string                    // Sign the image using a sigstore private key
-	signPassphraseFile       string                    // Path pointing to a passphrase file when signing
-	format                   commonFlag.OptionalString // Force conversion of the image to a specified format
-	source                   string                    // Source repository name
-	destination              string                    // Destination registry name
-	digestFile               string                    // Write digest to this file
-	scoped                   bool                      // When true, namespace copied images at destination using the source repository name
-	all                      bool                      // Copy all of the images if an image in the source is a list
-	dryRun                   bool                      // Don't actually copy anything, just output what it would have done
-	preserveDigests          bool                      // Preserve digests during sync
-	keepGoing                bool                      // Whether or not to abort the sync if there are any errors during syncing the images
-	appendSuffix             string                    // Suffix to append to destination image tag
+	global              *globalOptions // Global (not command dependent) skopeo options
+	deprecatedTLSVerify *deprecatedTLSVerifyOption
+	srcImage            *imageOptions     // Source image options
+	destImage           *imageDestOptions // Destination image options
+	retryOpts           *retry.Options
+	copy                *sharedCopyOptions
+	source              string // Source repository name
+	destination         string // Destination registry name
+	digestFile          string // Write digest to this file
+	scoped              bool   // When true, namespace copied images at destination using the source repository name
+	all                 bool   // Copy all of the images if an image in the source is a list
+	dryRun              bool   // Don't actually copy anything, just output what it would have done
+	keepGoing           bool   // Whether or not to abort the sync if there are any errors during syncing the images
+	appendSuffix        string // Suffix to append to destination image tag
 }
 
 // repoDescriptor contains information of a single repository used as a sync source.
@@ -89,6 +79,7 @@ func syncCmd(global *globalOptions) *cobra.Command {
 	srcFlags, srcOpts := dockerImageFlags(global, sharedOpts, deprecatedTLSVerifyOpt, "src-", "screds")
 	destFlags, destOpts := dockerImageFlags(global, sharedOpts, deprecatedTLSVerifyOpt, "dest-", "dcreds")
 	retryFlags, retryOpts := retryFlags()
+	copyFlags, copyOpts := sharedCopyFlags()
 
 	opts := syncOptions{
 		global:              global,
@@ -96,6 +87,7 @@ func syncCmd(global *globalOptions) *cobra.Command {
 		srcImage:            srcOpts,
 		destImage:           &imageDestOptions{imageOptions: destOpts},
 		retryOpts:           retryOpts,
+		copy:                copyOpts,
 	}
 
 	cmd := &cobra.Command{
@@ -113,12 +105,12 @@ See skopeo-sync(1) for details.
 	}
 	adjustUsage(cmd)
 	flags := cmd.Flags()
-	flags.BoolVar(&opts.removeSignatures, "remove-signatures", false, "Do not copy signatures from SOURCE images")
-	flags.StringVar(&opts.signByFingerprint, "sign-by", "", "Sign the image using a GPG key with the specified `FINGERPRINT`")
-	flags.StringVar(&opts.signBySigstoreParamFile, "sign-by-sigstore", "", "Sign the image using a sigstore parameter file at `PATH`")
-	flags.StringVar(&opts.signBySigstorePrivateKey, "sign-by-sigstore-private-key", "", "Sign the image using a sigstore private key at `PATH`")
-	flags.StringVar(&opts.signPassphraseFile, "sign-passphrase-file", "", "File that contains a passphrase for the --sign-by key")
-	flags.VarP(commonFlag.NewOptionalStringValue(&opts.format), "format", "f", `MANIFEST TYPE (oci, v2s1, or v2s2) to use when syncing image(s) to a destination (default is manifest type of source, with fallbacks)`)
+	flags.AddFlagSet(&sharedFlags)
+	flags.AddFlagSet(&deprecatedTLSVerifyFlags)
+	flags.AddFlagSet(&srcFlags)
+	flags.AddFlagSet(&destFlags)
+	flags.AddFlagSet(&retryFlags)
+	flags.AddFlagSet(&copyFlags)
 	flags.StringVarP(&opts.source, "src", "s", "", "SOURCE transport type")
 	flags.StringVarP(&opts.destination, "dest", "d", "", "DESTINATION transport type")
 	flags.BoolVar(&opts.scoped, "scoped", false, "Images at DESTINATION are prefix using the full source image path as scope")
@@ -126,13 +118,7 @@ See skopeo-sync(1) for details.
 	flags.StringVar(&opts.digestFile, "digestfile", "", "Write the digests and Image References of the resulting images to the specified file, separated by newlines")
 	flags.BoolVarP(&opts.all, "all", "a", false, "Copy all images if SOURCE-IMAGE is a list")
 	flags.BoolVar(&opts.dryRun, "dry-run", false, "Run without actually copying data")
-	flags.BoolVar(&opts.preserveDigests, "preserve-digests", false, "Preserve digests of images and lists")
 	flags.BoolVarP(&opts.keepGoing, "keep-going", "", false, "Do not abort the sync if any image copy fails")
-	flags.AddFlagSet(&sharedFlags)
-	flags.AddFlagSet(&deprecatedTLSVerifyFlags)
-	flags.AddFlagSet(&srcFlags)
-	flags.AddFlagSet(&destFlags)
-	flags.AddFlagSet(&retryFlags)
 	return cmd
 }
 
@@ -643,14 +629,6 @@ func (opts *syncOptions) run(args []string, stdout io.Writer) (retErr error) {
 		return err
 	}
 
-	var manifestType string
-	if opts.format.Present() {
-		manifestType, err = parseManifestFormat(opts.format.Value())
-		if err != nil {
-			return err
-		}
-	}
-
 	ctx, cancel := opts.global.commandTimeoutContext()
 	defer cancel()
 
@@ -669,57 +647,15 @@ func (opts *syncOptions) run(args []string, stdout io.Writer) (retErr error) {
 		return err
 	}
 
-	// c/image/copy.Image does allow creating both simple signing and sigstore signatures simultaneously,
-	// with independent passphrases, but that would make the CLI probably too confusing.
-	// For now, use the passphrase with either, but only one of them.
-	if opts.signPassphraseFile != "" && opts.signByFingerprint != "" && opts.signBySigstorePrivateKey != "" {
-		return fmt.Errorf("Only one of --sign-by and sign-by-sigstore-private-key can be used with sign-passphrase-file")
+	options, cleanupOptions, err := opts.copy.copyOptions(stdout)
+	if err != nil {
+		return err
 	}
-	var passphrase string
-	if opts.signPassphraseFile != "" {
-		p, err := cli.ReadPassphraseFile(opts.signPassphraseFile)
-		if err != nil {
-			return err
-		}
-		passphrase = p
-	} else if opts.signBySigstorePrivateKey != "" {
-		p, err := promptForPassphrase(opts.signBySigstorePrivateKey, os.Stdin, os.Stdout)
-		if err != nil {
-			return err
-		}
-		passphrase = p
-	}
+	defer cleanupOptions()
+	options.DestinationCtx = destinationCtx
+	options.ImageListSelection = imageListSelection
+	options.OptimizeDestinationImageAlreadyExists = true
 
-	var signers []*signer.Signer
-	if opts.signBySigstoreParamFile != "" {
-		signer, err := sigstore.NewSignerFromParameterFile(opts.signBySigstoreParamFile, &sigstore.Options{
-			PrivateKeyPassphrasePrompt: func(keyFile string) (string, error) {
-				return promptForPassphrase(keyFile, os.Stdin, os.Stdout)
-			},
-			Stdin:  os.Stdin,
-			Stdout: stdout,
-		})
-		if err != nil {
-			return fmt.Errorf("Error using --sign-by-sigstore: %w", err)
-		}
-		defer signer.Close()
-		signers = append(signers, signer)
-	}
-
-	options := copy.Options{
-		RemoveSignatures:                      opts.removeSignatures,
-		Signers:                               signers,
-		SignBy:                                opts.signByFingerprint,
-		SignPassphrase:                        passphrase,
-		SignBySigstorePrivateKeyFile:          opts.signBySigstorePrivateKey,
-		SignSigstorePrivateKeyPassphrase:      []byte(passphrase),
-		ReportWriter:                          stdout,
-		DestinationCtx:                        destinationCtx,
-		ImageListSelection:                    imageListSelection,
-		PreserveDigests:                       opts.preserveDigests,
-		OptimizeDestinationImageAlreadyExists: true,
-		ForceManifestMIMEType:                 manifestType,
-	}
 	errorsPresent := false
 	imagesNumber := 0
 	if opts.dryRun {
@@ -775,7 +711,7 @@ func (opts *syncOptions) run(args []string, stdout io.Writer) (retErr error) {
 			} else {
 				logrus.WithFields(fromToFields).Infof("Copying image ref %d/%d", counter+1, len(srcRepo.ImageRefs))
 				if err = retry.IfNecessary(ctx, func() error {
-					manifestBytes, err = copy.Image(ctx, policyContext, destRef, ref, &options)
+					manifestBytes, err = copy.Image(ctx, policyContext, destRef, ref, options)
 					return err
 				}, opts.retryOpts); err != nil {
 					if !opts.keepGoing {

@@ -11,11 +11,15 @@ import (
 
 	commonFlag "github.com/containers/common/pkg/flag"
 	"github.com/containers/common/pkg/retry"
+	"github.com/containers/image/v5/copy"
 	"github.com/containers/image/v5/directory"
 	"github.com/containers/image/v5/manifest"
 	ociarchive "github.com/containers/image/v5/oci/archive"
 	ocilayout "github.com/containers/image/v5/oci/layout"
+	"github.com/containers/image/v5/pkg/cli"
+	"github.com/containers/image/v5/pkg/cli/sigstore"
 	"github.com/containers/image/v5/pkg/compression"
+	"github.com/containers/image/v5/signature/signer"
 	"github.com/containers/image/v5/storage"
 	"github.com/containers/image/v5/transports/alltransports"
 	"github.com/containers/image/v5/types"
@@ -176,9 +180,9 @@ func imageFlags(global *globalOptions, shared *sharedImageOptions, deprecatedTLS
 	dockerFlags, opts := dockerImageFlags(global, shared, deprecatedTLSVerify, flagPrefix, credsOptionAlias)
 
 	fs := pflag.FlagSet{}
+	fs.AddFlagSet(&dockerFlags)
 	fs.StringVar(&opts.sharedBlobDir, flagPrefix+"shared-blob-dir", "", "`DIRECTORY` to use to share blobs across OCI repositories")
 	fs.StringVar(&opts.dockerDaemonHost, flagPrefix+"daemon-host", "", "use docker daemon host at `HOST` (docker-daemon: only)")
-	fs.AddFlagSet(&dockerFlags)
 	return fs, opts
 }
 
@@ -317,6 +321,110 @@ func (opts *imageDestOptions) warnAboutIneffectiveOptions(destTransport types.Im
 			logrus.Warnf("--%s can only be used if the destination transport is 'dir'", opts.imageDestFlagPrefix+"decompress")
 		}
 	}
+}
+
+// sharedCopyOptions collects CLI flags that affect copying images, currently shared between the copy and sync commands.
+type sharedCopyOptions struct {
+	removeSignatures         bool                      // Do not copy signatures from the source image
+	signByFingerprint        string                    // Sign the image using a GPG key with the specified fingerprint
+	signBySigstoreParamFile  string                    // Sign the image using a sigstore signature per configuration in a param file
+	signBySigstorePrivateKey string                    // Sign the image using a sigstore private key
+	signPassphraseFile       string                    // Path pointing to a passphrase file when signing
+	preserveDigests          bool                      // Preserve digests during copy
+	format                   commonFlag.OptionalString // Force conversion of the image to a specified format
+}
+
+// sharedCopyFlags prepares a collection of CLI flags writing into sharedCopyoptions.
+func sharedCopyFlags() (pflag.FlagSet, *sharedCopyOptions) {
+	opts := sharedCopyOptions{}
+	fs := pflag.FlagSet{}
+	fs.BoolVar(&opts.removeSignatures, "remove-signatures", false, "Do not copy signatures from source")
+	fs.StringVar(&opts.signByFingerprint, "sign-by", "", "Sign the image using a GPG key with the specified `FINGERPRINT`")
+	fs.StringVar(&opts.signBySigstoreParamFile, "sign-by-sigstore", "", "Sign the image using a sigstore parameter file at `PATH`")
+	fs.StringVar(&opts.signBySigstorePrivateKey, "sign-by-sigstore-private-key", "", "Sign the image using a sigstore private key at `PATH`")
+	fs.StringVar(&opts.signPassphraseFile, "sign-passphrase-file", "", "Read a passphrase for signing an image from `PATH`")
+	fs.VarP(commonFlag.NewOptionalStringValue(&opts.format), "format", "f", `MANIFEST TYPE (oci, v2s1, or v2s2) to use in the destination (default is manifest type of source, with fallbacks)`)
+	fs.BoolVar(&opts.preserveDigests, "preserve-digests", false, "Preserve digests of images and lists")
+	return fs, &opts
+}
+
+// copyOptions interprets opts, returns a partially-filled *copy.Options,
+// and a function that should be called to clean up.
+func (opts *sharedCopyOptions) copyOptions(stdout io.Writer) (*copy.Options, func(), error) {
+	var manifestType string
+	if opts.format.Present() {
+		mt, err := parseManifestFormat(opts.format.Value())
+		if err != nil {
+			return nil, nil, err
+		}
+		manifestType = mt
+	}
+
+	// c/image/copy.Image does allow creating both simple signing and sigstore signatures simultaneously,
+	// with independent passphrases, but that would make the CLI probably too confusing.
+	// For now, use the passphrase with either, but only one of them.
+	if opts.signPassphraseFile != "" && opts.signByFingerprint != "" && opts.signBySigstorePrivateKey != "" {
+		return nil, nil, fmt.Errorf("Only one of --sign-by and sign-by-sigstore-private-key can be used with sign-passphrase-file")
+	}
+	var passphrase string
+	if opts.signPassphraseFile != "" {
+		p, err := cli.ReadPassphraseFile(opts.signPassphraseFile)
+		if err != nil {
+			return nil, nil, err
+		}
+		passphrase = p
+	} else if opts.signBySigstorePrivateKey != "" {
+		p, err := promptForPassphrase(opts.signBySigstorePrivateKey, os.Stdin, os.Stdout)
+		if err != nil {
+			return nil, nil, err
+		}
+		passphrase = p
+	} // opts.signByFingerprint triggers a GPG-agent passphrase prompt, possibly using a more secure channel, so we usually shouldn’t prompt ourselves if no passphrase was explicitly provided.
+	var passphraseBytes []byte
+	if passphrase != "" {
+		passphraseBytes = []byte(passphrase)
+	}
+
+	var signers []*signer.Signer
+	closeSigners := func() {
+		for _, signer := range signers {
+			signer.Close()
+		}
+	}
+	succeeded := false
+	defer func() {
+		if !succeeded {
+			closeSigners()
+		}
+	}()
+	if opts.signBySigstoreParamFile != "" {
+		signer, err := sigstore.NewSignerFromParameterFile(opts.signBySigstoreParamFile, &sigstore.Options{
+			PrivateKeyPassphrasePrompt: func(keyFile string) (string, error) {
+				return promptForPassphrase(keyFile, os.Stdin, os.Stdout)
+			},
+			Stdin:  os.Stdin,
+			Stdout: stdout,
+		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("Error using --sign-by-sigstore: %w", err)
+		}
+		signers = append(signers, signer)
+	}
+
+	succeeded = true
+	return &copy.Options{
+		RemoveSignatures:                 opts.removeSignatures,
+		Signers:                          signers,
+		SignBy:                           opts.signByFingerprint,
+		SignPassphrase:                   passphrase,
+		SignBySigstorePrivateKeyFile:     opts.signBySigstorePrivateKey,
+		SignSigstorePrivateKeyPassphrase: passphraseBytes,
+
+		ReportWriter: stdout,
+
+		PreserveDigests:       opts.preserveDigests,
+		ForceManifestMIMEType: manifestType,
+	}, closeSigners, nil
 }
 
 func parseCreds(creds string) (string, string, error) {

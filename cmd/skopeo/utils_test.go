@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"errors"
+	"os"
 	"testing"
 
+	"github.com/containers/image/v5/copy"
 	"github.com/containers/image/v5/manifest"
 	"github.com/containers/image/v5/types"
 	imgspecv1 "github.com/opencontainers/image-spec/specs-go/v1"
@@ -348,6 +351,92 @@ func TestTLSVerifyFlags(t *testing.T) {
 			}
 		})
 	}
+}
+
+// fakeSharedCopyOptions creates sharedCopyOptions and sets it according to cmdFlags.
+func fakeSharedCopyOptions(t *testing.T, cmdFlags []string) *sharedCopyOptions {
+	_, cmd := fakeGlobalOptions(t, []string{})
+	sharedCopyFlags, sharedCopyOpts := sharedCopyFlags()
+	cmd.Flags().AddFlagSet(&sharedCopyFlags)
+	err := cmd.ParseFlags(cmdFlags)
+	require.NoError(t, err)
+	return sharedCopyOpts
+}
+
+func TestSharedCopyOptionsCopyOptions(t *testing.T) {
+	someStdout := bytes.Buffer{}
+
+	// Default state
+	opts := fakeSharedCopyOptions(t, []string{})
+	res, cleanup, err := opts.copyOptions(&someStdout)
+	require.NoError(t, err)
+	defer cleanup()
+	assert.Equal(t, &copy.Options{
+		ReportWriter: &someStdout,
+	}, res)
+
+	// Set most flags to non-default values
+	// This should also test --sign-by-sigstore and --sign-by-sigstore-private-key; we would have
+	// to create test keys for that.
+	opts = fakeSharedCopyOptions(t, []string{
+		"--remove-signatures",
+		"--sign-by", "gpgFingerprint",
+		"--format", "oci",
+		"--preserve-digests",
+	})
+	res, cleanup, err = opts.copyOptions(&someStdout)
+	require.NoError(t, err)
+	defer cleanup()
+	assert.Equal(t, &copy.Options{
+		RemoveSignatures:      true,
+		SignBy:                "gpgFingerprint",
+		ReportWriter:          &someStdout,
+		PreserveDigests:       true,
+		ForceManifestMIMEType: imgspecv1.MediaTypeImageManifest,
+	}, res)
+
+	// --sign-passphrase-file + --sign-by work
+	passphraseFile, err := os.CreateTemp("", "passphrase") // Eventually we could refer to a passphrase fixture instead
+	require.NoError(t, err)
+	defer os.Remove(passphraseFile.Name())
+	_, err = passphraseFile.WriteString("test-passphrase")
+	require.NoError(t, err)
+	opts = fakeSharedCopyOptions(t, []string{
+		"--sign-by", "gpgFingerprint",
+		"--sign-passphrase-file", passphraseFile.Name(),
+	})
+	res, cleanup, err = opts.copyOptions(&someStdout)
+	require.NoError(t, err)
+	defer cleanup()
+	assert.Equal(t, &copy.Options{
+		SignBy:                           "gpgFingerprint",
+		SignPassphrase:                   "test-passphrase",
+		SignSigstorePrivateKeyPassphrase: []byte("test-passphrase"),
+		ReportWriter:                     &someStdout,
+	}, res)
+	// --sign-passphrase-file + --sign-by-sigstore-private-key should be tested here.
+
+	// Invalid --format
+	opts = fakeSharedCopyOptions(t, []string{"--format", "invalid"})
+	_, _, err = opts.copyOptions(&someStdout)
+	assert.Error(t, err)
+
+	// More --sign-passphrase-file, --sign-by-sigstore-private-key, --sign-by-sigstore failure cases should be tested here.
+
+	// --sign-passphrase-file not found
+	opts = fakeSharedCopyOptions(t, []string{
+		"--sign-by", "gpgFingerprint",
+		"--sign-passphrase-file", "/dev/null/this/does/not/exist",
+	})
+	_, _, err = opts.copyOptions(&someStdout)
+	assert.Error(t, err)
+
+	// --sign-by-sigstore file not found
+	opts = fakeSharedCopyOptions(t, []string{
+		"--sign-by-sigstore", "/dev/null/this/does/not/exist",
+	})
+	_, _, err = opts.copyOptions(&someStdout)
+	assert.Error(t, err)
 }
 
 func TestParseManifestFormat(t *testing.T) {

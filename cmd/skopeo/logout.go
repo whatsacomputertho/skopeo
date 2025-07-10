@@ -28,8 +28,8 @@ func logoutCmd(global *globalOptions) *cobra.Command {
 	}
 	adjustUsage(cmd)
 	flags := cmd.Flags()
-	commonFlag.OptionalBoolFlag(flags, &opts.tlsVerify, "tls-verify", "require HTTPS and verify certificates when accessing the registry")
 	flags.AddFlagSet(auth.GetLogoutFlags(&opts.logoutOpts))
+	commonFlag.OptionalBoolFlag(flags, &opts.tlsVerify, "tls-verify", "require HTTPS and verify certificates when accessing the registry")
 	return cmd
 }
 
