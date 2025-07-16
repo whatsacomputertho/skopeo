@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"os"
 	"slices"
 	"strings"
+	"sync"
 
 	commonFlag "github.com/containers/common/pkg/flag"
 	"github.com/containers/common/pkg/retry"
@@ -210,7 +212,8 @@ func filterDockerTagsByTagSemver(opts *tagsOptions, tags *tagListOutput) (*filte
 	return filtered, nil
 }
 
-func filterDockerTagsByLabelSemver(ctx context.Context, sys *types.SystemContext, opts *tagsOptions, tags *tagListOutput) (filtered *filteredTags, retErr error) {
+// Use goroutines to parallelize & display progress continuously
+func filterDockerTagsByLabelSemver(ctx context.Context, sys *types.SystemContext, opts *tagsOptions, tags *tagListOutput) (*filteredTags, error) {
 	// Get the user-provided threshold version
 	// This will be validated later when the comparison takes place
 	var threshold string
@@ -221,67 +224,157 @@ func filterDockerTagsByLabelSemver(ctx context.Context, sys *types.SystemContext
 		threshold = "v0.1.0"
 	}
 
-	// Loop through each tag and inspect for its labels
-	filtered = newFilteredTags()
-	for _, tag := range tags.Tags {
-		var (
-			src         types.ImageSource
-			imgInspect  *types.ImageInspectInfo
-			err error
-		)
+	// Initialize a zeroed filteredTags struct to return
+	filtered := newFilteredTags()
 
-		// Reconstruct the image reference and inspect it, borrowed from inspect implementation
-		// Hardcode to docker:// as we know only this transport will trigger this function
-		imageName := fmt.Sprintf("docker://%s:%s", tags.Repository, tag)
-		if err := retry.IfNecessary(ctx, func() error {
-			src, err = parseImageSource(ctx, opts.image, imageName)
-			return err
-		}, opts.retryOpts); err != nil {
-			return nil, fmt.Errorf("Error parsing image name %q: %w", imageName, err)
-		}
-		defer func() {
-			if err := src.Close(); err != nil {
-				retErr = noteCloseFailure(retErr, "closing image", err)
+	// Set up channels for communication as labels are fetched
+	var filteredChan = make(chan string, 8)
+	var errChan = make(chan error, 8)
+	var doneChan = make(chan struct{})
+
+	// Blocking channel for limiting concurrent fetches from the registry
+	var fetchLimitChan = make(chan struct{}, 8)
+
+	// Total tags and counter for filtered tags & errors
+	totalTags := len(tags.Tags)
+	tagsFiltered := 0
+	numErrors := 0
+
+	// Goroutine for displaying progress
+	var readWaitGroup = sync.WaitGroup{}
+	readWaitGroup.Add(1)
+	go func(filteredChan <-chan string, errChan <-chan error, doneChan <-chan struct{}) {
+		// Loop for monitoring progress & filtering tags
+	filterLoop:
+		for {
+			select {
+			case msg := <-filteredChan:
+				// Sometimes this case fires off erroneously causing the count to be inaccurate
+				// I'm not sure why this is the case but checking for valid values sent through
+				// the channel seems to filter out the erroneous instances and re-align count
+				if len(msg) > 0 {
+					// Log progress in-place
+					tagsFiltered += 1
+					fmt.Printf("\rfetching image labels\t%d / %d", tagsFiltered, totalTags)
+				}
+			case err := <-errChan:
+				// Print the error and append to the errors slice
+				if err != nil {
+					numErrors += 1
+					fmt.Fprintf(os.Stderr, "\nerror while fetching image labels %s\n", err)
+				}
+			case <-doneChan:
+				break filterLoop
 			}
-		}()
-		unparsedInstance := image.UnparsedInstance(src, nil)
-		img, err := image.FromUnparsedImage(ctx, sys, unparsedInstance)
-		if err != nil {
-			return nil, fmt.Errorf("Error parsing manifest for image: %w", err)
-		}
-		if err := retry.IfNecessary(ctx, func() error {
-			imgInspect, err = img.Inspect(ctx)
-			return err
-		}, opts.retryOpts); err != nil {
-			return nil, err
 		}
 
-		// Get the version label and compare
-		versionLabel := opts.filterOpts.VersionLabel.Value()
-		tagVersion, ok := imgInspect.Labels[versionLabel]
-		if !ok {
-			return nil, fmt.Errorf("Version label not found: %s", versionLabel)
-		}
-		err = filterDockerTagBySemver(filtered, opts, threshold, tag, tagVersion)
-		if err != nil {
-			return nil, fmt.Errorf("Error filtering tags: %w", err)
-		}
+		// Log completion in-place and close the goroutine
+		fmt.Printf("\rfetching image labels\t%d / %d (done)\n", tagsFiltered, totalTags)
+		readWaitGroup.Done()
+	}(filteredChan, errChan, doneChan)
+
+	// Goroutines for fetching image labels
+	var fetchWaitGroup = sync.WaitGroup{}
+	for i := 0; i < len(tags.Tags); i++ {
+		fetchWaitGroup.Add(1)
+		fetchLimitChan <- struct{}{}
+		go func(sys *types.SystemContext, repo string, tag string, filteredChan chan<- string, errChan chan<- error, fetchLimitChan <-chan struct{}) {
+			// Close the channel once complete
+			defer func() { fetchWaitGroup.Done(); <-fetchLimitChan }()
+
+			// Initialize some variables
+			var (
+				src         types.ImageSource
+				imgInspect  *types.ImageInspectInfo
+				err error
+			)
+
+			// Reconstruct the image reference and inspect it, borrowed from inspect implementation
+			// Hardcode to docker:// as we know only this transport will trigger this function
+			imageName := fmt.Sprintf("docker://%s:%s", repo, tag)
+			if err := retry.IfNecessary(ctx, func() error {
+				src, err = parseImageSource(ctx, opts.image, imageName)
+				return err
+			}, opts.retryOpts); err != nil {
+				errChan <- fmt.Errorf("Error parsing image name %q: %w", imageName, err)
+				return
+			}
+			defer func() {
+				if err := src.Close(); err != nil {
+					var retErr error
+					errChan <- noteCloseFailure(retErr, "closing image", err)
+				}
+			}()
+			unparsedInstance := image.UnparsedInstance(src, nil)
+			img, err := image.FromUnparsedImage(ctx, sys, unparsedInstance)
+			if err != nil {
+				errChan <- fmt.Errorf("Error parsing manifest for tag %s: %w", tag, err)
+				return
+			}
+			if err := retry.IfNecessary(ctx, func() error {
+				imgInspect, err = img.Inspect(ctx)
+				return err
+			}, opts.retryOpts); err != nil {
+				errChan <- err
+				return
+			}
+
+			// Get the version label and filter it into the filteredTags struct
+			versionLabel := opts.filterOpts.VersionLabel.Value()
+			tagVersion, ok := imgInspect.Labels[versionLabel]
+			if !ok {
+				errChan <- fmt.Errorf("For tag %s: version label not found: %s", tag, versionLabel)
+				return
+			}
+			err = filterDockerTagBySemver(filtered, opts, threshold, tag, tagVersion)
+			if err != nil {
+				errChan <- fmt.Errorf("Error filtering tags: %w", err)
+				return
+			}
+
+			// If successful, then signal completion
+			filteredChan <- "done"
+		}(sys, tags.Repository, tags.Tags[i], filteredChan, errChan, fetchLimitChan)
+	}
+
+	// Goroutines for monitoring fetch & read wait groups
+	var monitorWaitGroup = sync.WaitGroup{}
+	monitorWaitGroup.Add(2)
+	go func(doneChan chan struct{}) {
+		readWaitGroup.Wait()
+		close(doneChan)
+		monitorWaitGroup.Done()
+	}(doneChan)
+	go func(filteredChan chan string, errChan chan error, fetchLimitChan chan struct{}, doneChan chan struct{}) {
+		fetchWaitGroup.Wait()
+		close(filteredChan)
+		close(errChan)
+		close(fetchLimitChan)
+		doneChan <- struct{}{} // Signal completion to the readWaitGroup
+		monitorWaitGroup.Done()
+	}(filteredChan, errChan, fetchLimitChan, doneChan)
+	monitorWaitGroup.Wait()
+
+	// Return the filtered tags, and an error summary if any errors occurred
+	if numErrors > 0 {
+		return filtered, fmt.Errorf("Encountered %d errors while filtering tags by label semver", numErrors)
 	}
 	return filtered, nil
 }
 
-func filterDockerTags(ctx context.Context, sys *types.SystemContext, opts *tagsOptions, repositoryName string, tags []string) (string, []string, error) {
+func filterDockerTags(ctx context.Context, sys *types.SystemContext, opts *tagsOptions, repositoryName string, tags []string) (*filteredTags, error) {
 	tagList := &tagListOutput{
 		Repository: repositoryName,
 		Tags:       tags,
 	}
-	var filtered *filteredTags
-	var err error
 	if opts.filterOpts.VersionLabel.Present() {
-		filtered, err = filterDockerTagsByLabelSemver(ctx, sys, opts, tagList)
-	} else {
-		filtered, err = filterDockerTagsByTagSemver(opts, tagList)
+		return filterDockerTagsByLabelSemver(ctx, sys, opts, tagList)
 	}
+	return filterDockerTagsByTagSemver(opts, tagList)
+}
+
+func listFilteredDockerTags(ctx context.Context, sys *types.SystemContext, opts *tagsOptions, repositoryName string, tags []string) (string, []string, error) {
+	filtered, err := filterDockerTags(ctx, sys, opts, repositoryName, tags)
 	if err != nil {
 		return ``, nil, fmt.Errorf("Error filtering tags by semver: %w", err)
 	}
@@ -309,7 +402,7 @@ func listDockerTags(ctx context.Context, sys *types.SystemContext, opts *tagsOpt
 
 	// If the user requests all tags before a certain threshold, then filter
 	if opts.filterOpts.FilterPresent() {
-		return filterDockerTags(ctx, sys, opts, repositoryName, tags)
+		return listFilteredDockerTags(ctx, sys, opts, repositoryName, tags)
 	}
 
 	return repositoryName, tags, nil

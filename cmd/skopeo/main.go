@@ -103,6 +103,7 @@ func createApp() (*cobra.Command, *globalOptions) {
 		logoutCmd(&opts),
 		manifestDigestCmd(),
 		proxyCmd(&opts),
+		pruneCmd(&opts),
 		syncCmd(&opts),
 		standaloneSignCmd(),
 		standaloneVerifyCmd(),
