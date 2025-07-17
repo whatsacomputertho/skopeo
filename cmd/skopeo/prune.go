@@ -20,6 +20,7 @@ import (
 	"github.com/containers/image/v5/transports/alltransports"
 	"github.com/containers/image/v5/types"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 // Enumerated constant for byte units
@@ -76,7 +77,7 @@ func bytesToByteUnit(bytes int64) string {
 	return fmt.Sprintf("%.2f %s", unitDec, unitSuf)
 }
 
-var pruneTransportHandlers = map[string]func(ctx context.Context, sys *types.SystemContext, opts *tagsOptions, userInput string) error {
+var pruneTransportHandlers = map[string]func(ctx context.Context, sys *types.SystemContext, opts *pruneOptions, userInput string) error {
 	docker.Transport.Name():  pruneDockerTags,
 }
 
@@ -86,11 +87,25 @@ func supportedPruneTransports(joinStr string) string {
 	return strings.Join(res, joinStr)
 }
 
+type pruneUserOptions struct {
+	SkipSummary bool
+	NonInteractive bool
+}
+
+func pruneFlags() (pflag.FlagSet, *pruneUserOptions) {
+	opts := pruneUserOptions{}
+	fs := pflag.FlagSet{}
+	fs.BoolVarP(&opts.SkipSummary, "skip-summary", "s", false, "Skip computing the prune summary of freed storage space")
+	fs.BoolVarP(&opts.NonInteractive, "non-interactive", "y", false, "Do not display an interactive prompt for the user to confirm before beginning puning")
+	return fs, &opts
+}
+
 type pruneOptions struct {
 	global     *globalOptions
 	image      *imageOptions
 	retryOpts  *retry.Options
 	filterOpts *tagFilterOptions
+	pruneOpts *pruneUserOptions
 }
 
 func (p *pruneOptions) intoTagsOptions() *tagsOptions {
@@ -108,12 +123,14 @@ func pruneCmd(global *globalOptions) *cobra.Command {
 	imageFlags, imageOpts := dockerImageFlags(global, sharedOpts, nil, "", "")
 	retryFlags, retryOpts := retryFlags()
 	filterFlags, filterOpts := filterFlags()
+	pruneFlags, pruneOpts := pruneFlags()
 
 	opts := pruneOptions{
 		global:    global,
 		image:     imageOpts,
 		retryOpts: retryOpts,
 		filterOpts: filterOpts,
+		pruneOpts: pruneOpts,
 	}
 
 	cmd := &cobra.Command{
@@ -135,6 +152,7 @@ See skopeo-prune(1) section "REPOSITORY NAMES" for the expected format
 	flags.AddFlagSet(&imageFlags)
 	flags.AddFlagSet(&retryFlags)
 	flags.AddFlagSet(&filterFlags)
+	flags.AddFlagSet(&pruneFlags)
 	return cmd
 }
 
@@ -143,7 +161,7 @@ func displayPrunePrompt() bool {
 	// Prompt the user whether they would like to proceed to prune
 	reader := bufio.NewReader(os.Stdin)
 	for {
-		fmt.Println("\nwarning: continuing to prune will lead to irreversible data loss")
+		fmt.Println("warning: continuing to prune will lead to irreversible data loss")
 		fmt.Print("continue to prune? (y/n): ")
 		input, _ := reader.ReadString('\n')
 		input = strings.TrimSpace(input)
@@ -312,7 +330,7 @@ func getSizeMaps(ctx context.Context, sys *types.SystemContext, url string) (map
 }
 
 // Function that computes the deduplicated size of a slice of image tags
-func getDeduplicatedSizeParallel(ctx context.Context, sys *types.SystemContext, opts *tagsOptions, repositoryName string, tags []string) int64 {
+func getDeduplicatedSizeParallel(ctx context.Context, sys *types.SystemContext, repositoryName string, tags []string) int64 {
 	// Get the config & layer size maps
 	dedupConfigSizeMap := make(map[string]int64)
 	dedupLayerSizeMap := make(map[string]int64)
@@ -428,7 +446,7 @@ func getDeduplicatedSizeParallel(ctx context.Context, sys *types.SystemContext, 
 
 // Function that displays the prune summary of size freed in pruning
 // TODO: Determine if errors occurred during size calculation
-func displayPruneSummary(ctx context.Context, sys *types.SystemContext, opts *tagsOptions, userInput string, toPrune []string, toKeep []string) error {
+func displayPruneSummary(ctx context.Context, sys *types.SystemContext, userInput string, toPrune []string, toKeep []string) error {
 	imgRef, err := parseDockerRepositoryReference(userInput)
 	if err != nil {
 		return fmt.Errorf("Error parsing image reference: %w", err)
@@ -436,8 +454,8 @@ func displayPruneSummary(ctx context.Context, sys *types.SystemContext, opts *ta
 	repositoryName := imgRef.DockerReference().Name()
 	
 	// Compute the deduplicated size of the images that will be pruned vs kept
-	pruneSize := getDeduplicatedSizeParallel(ctx, sys, opts, repositoryName, toPrune)
-	keepSize := getDeduplicatedSizeParallel(ctx, sys, opts, repositoryName, toKeep)
+	pruneSize := getDeduplicatedSizeParallel(ctx, sys, repositoryName, toPrune)
+	keepSize := getDeduplicatedSizeParallel(ctx, sys, repositoryName, toKeep)
 
 	// Summarize the list
 	fmt.Println("")
@@ -447,12 +465,13 @@ func displayPruneSummary(ctx context.Context, sys *types.SystemContext, opts *ta
 	keepDisp := fmt.Sprintf("Keep\t%d\t%s", len(toKeep), bytesToByteUnit(keepSize))
 	fmt.Fprintln(w, pruneDisp)
 	fmt.Fprintln(w, keepDisp)
+	fmt.Fprintln(w, "")
 	w.Flush()
 	return nil // Success
 }
 
 // Function that prunes the tags identified for pruning and displays progress
-func pruneDockerTagsParallel(ctx context.Context, sys *types.SystemContext, opts *tagsOptions, repositoryName string, tags []string) error {
+func pruneDockerTagsParallel(ctx context.Context, sys *types.SystemContext, repositoryName string, tags []string) error {
 	// Variable tracking how many tags have been pruned
 	totalTags := len(tags)
 	tagsPruned := 0
@@ -577,9 +596,9 @@ func getFilteredDockerTags(ctx context.Context, sys *types.SystemContext, opts *
 }
 
 // Function that prunes docker tags
-func pruneDockerTags(ctx context.Context, sys *types.SystemContext, opts *tagsOptions, userInput string) error {
+func pruneDockerTags(ctx context.Context, sys *types.SystemContext, opts *pruneOptions, userInput string) error {
 	// Get the filtered docker tags for the given repository
-	filteredTags, err := getFilteredDockerTags(ctx, sys, opts, userInput)
+	filteredTags, err := getFilteredDockerTags(ctx, sys, opts.intoTagsOptions(), userInput)
 	if err != nil {
 		return fmt.Errorf("Error getting filtered docker tags: %w", err)
 	}
@@ -597,19 +616,23 @@ func pruneDockerTags(ctx context.Context, sys *types.SystemContext, opts *tagsOp
 
 	// Display the prune summary
 	// TODO: Error check - determine if errors occurred during size calculation
-	err = displayPruneSummary(ctx, sys, opts, userInput, toPrune, toKeep)
-	if err != nil {
-		return fmt.Errorf("Error displaying prune summary: %w", err)
+	if !opts.pruneOpts.SkipSummary {
+		err = displayPruneSummary(ctx, sys, userInput, toPrune, toKeep)
+		if err != nil {
+			return fmt.Errorf("Error displaying prune summary: %w", err)
+		}
 	}
 
 	// Display the prune prompt
-	accepted := displayPrunePrompt()
-	if !accepted{
-		return nil // User decided not to prune
+	if !opts.pruneOpts.NonInteractive {
+		accepted := displayPrunePrompt()
+		if !accepted{
+			return nil // User decided not to prune
+		}
 	}
 
 	// Prune the docker tags
-	err = pruneDockerTagsParallel(ctx, sys, opts, userInput, toPrune)
+	err = pruneDockerTagsParallel(ctx, sys, userInput, toPrune)
 	if err != nil {
 		return fmt.Errorf("Error pruning tags: %w", err)
 	}
@@ -635,7 +658,7 @@ func (opts *pruneOptions) run(args []string, stdout io.Writer) (retErr error) {
 	}
 
 	if val, ok := pruneTransportHandlers[transport.Name()]; ok {
-		err = val(ctx, sys, opts.intoTagsOptions(), args[0])
+		err = val(ctx, sys, opts, args[0])
 		if err != nil {
 			return err
 		}
@@ -646,5 +669,3 @@ func (opts *pruneOptions) run(args []string, stdout io.Writer) (retErr error) {
 
 	return nil // Success
 }
-
-// TODO: Prune-many command

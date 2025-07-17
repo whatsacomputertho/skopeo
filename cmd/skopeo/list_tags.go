@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	commonFlag "github.com/containers/common/pkg/flag"
 	"github.com/containers/common/pkg/retry"
@@ -47,6 +48,7 @@ func newFilteredTags() *filteredTags {
 
 type tagFilterOptions struct {
 	BeforeVersion commonFlag.OptionalString
+	BeforeTime commonFlag.OptionalString
 	VersionLabel  commonFlag.OptionalString
 	Valid         commonFlag.OptionalBool
 	Invalid       commonFlag.OptionalBool
@@ -54,13 +56,18 @@ type tagFilterOptions struct {
 }
 
 func (opts *tagFilterOptions) FilterPresent() bool {
-	return opts.BeforeVersion.Present() || opts.Valid.Present() || opts.Invalid.Present()
+	return opts.BeforeVersion.Present() || opts.Valid.Present() || opts.Invalid.Present() || opts.BeforeTime.Present()
+}
+
+func (opts *tagFilterOptions) InspectFilterPresent() bool {
+	return (opts.BeforeVersion.Present() && opts.VersionLabel.Present()) || opts.BeforeTime.Present()
 }
 
 func filterFlags() (pflag.FlagSet, *tagFilterOptions) {
 	opts := tagFilterOptions{}
 	fs := pflag.FlagSet{}
 	fs.Var(commonFlag.NewOptionalStringValue(&opts.BeforeVersion), "before-version", "A version threshold prior to which to list tags")
+	fs.Var(commonFlag.NewOptionalStringValue(&opts.BeforeTime), "before-time", "A date threshold prior to which to list tags")
 	fs.Var(commonFlag.NewOptionalStringValue(&opts.VersionLabel), "version-label", "A label from which to derive the version for each tag")
 	commonFlag.OptionalBoolFlag(&fs, &opts.Valid, "valid", "Whether to list only tags with valid semver")
 	commonFlag.OptionalBoolFlag(&fs, &opts.Invalid, "invalid", "Whether to list only tags with invalid semver")
@@ -190,6 +197,16 @@ func filterDockerTagBySemver(filtered *filteredTags, opts *tagsOptions, threshol
 	return nil
 }
 
+func filterDockerTagByDate(filtered *filteredTags, opts *tagsOptions, timeThreshold time.Time, tag string, created time.Time) (error) {
+	// Compare the created date against the threshold date
+	if created.Before(timeThreshold) {
+		filtered.ToPrune = append(filtered.ToPrune, tag)
+	} else {
+		filtered.ToKeep = append(filtered.ToKeep, tag)
+	}
+	return nil
+}
+
 func filterDockerTagsByTagSemver(opts *tagsOptions, tags *tagListOutput) (*filteredTags, error) {
 	// Get the user-provided threshold version
 	// This will be validated later when the comparison takes place
@@ -213,15 +230,15 @@ func filterDockerTagsByTagSemver(opts *tagsOptions, tags *tagListOutput) (*filte
 }
 
 // Use goroutines to parallelize & display progress continuously
-func filterDockerTagsByLabelSemver(ctx context.Context, sys *types.SystemContext, opts *tagsOptions, tags *tagListOutput) (*filteredTags, error) {
+func filterDockerTagsByImageMetadata(ctx context.Context, sys *types.SystemContext, opts *tagsOptions, tags *tagListOutput) (*filteredTags, error) {
 	// Get the user-provided threshold version
 	// This will be validated later when the comparison takes place
-	var threshold string
+	var versionThreshold string
 	if opts.filterOpts.BeforeVersion.Present() {
-		threshold = opts.filterOpts.BeforeVersion.Value()
+		versionThreshold = opts.filterOpts.BeforeVersion.Value()
 	} else {
 		// Set as an arbitrary valid version since this isn't going to affect output
-		threshold = "v0.1.0"
+		versionThreshold = "v0.1.0"
 	}
 
 	// Initialize a zeroed filteredTags struct to return
@@ -255,13 +272,13 @@ func filterDockerTagsByLabelSemver(ctx context.Context, sys *types.SystemContext
 				if len(msg) > 0 {
 					// Log progress in-place
 					tagsFiltered += 1
-					fmt.Printf("\rfetching image labels\t%d / %d", tagsFiltered, totalTags)
+					fmt.Fprintf(os.Stderr, "\rinspecting image tags\t%d / %d", tagsFiltered, totalTags)
 				}
 			case err := <-errChan:
 				// Print the error and append to the errors slice
 				if err != nil {
 					numErrors += 1
-					fmt.Fprintf(os.Stderr, "\nerror while fetching image labels %s\n", err)
+					fmt.Fprintf(os.Stderr, "\nerror while inspecting image tags %s\n", err)
 				}
 			case <-doneChan:
 				break filterLoop
@@ -269,11 +286,11 @@ func filterDockerTagsByLabelSemver(ctx context.Context, sys *types.SystemContext
 		}
 
 		// Log completion in-place and close the goroutine
-		fmt.Printf("\rfetching image labels\t%d / %d (done)\n", tagsFiltered, totalTags)
+		fmt.Fprintf(os.Stderr, "\rinspecting image tags\t%d / %d (done)\n", tagsFiltered, totalTags)
 		readWaitGroup.Done()
 	}(filteredChan, errChan, doneChan)
 
-	// Goroutines for fetching image labels
+	// Goroutines for fetching image metadata
 	var fetchWaitGroup = sync.WaitGroup{}
 	for i := 0; i < len(tags.Tags); i++ {
 		fetchWaitGroup.Add(1)
@@ -319,17 +336,31 @@ func filterDockerTagsByLabelSemver(ctx context.Context, sys *types.SystemContext
 				return
 			}
 
-			// Get the version label and filter it into the filteredTags struct
-			versionLabel := opts.filterOpts.VersionLabel.Value()
-			tagVersion, ok := imgInspect.Labels[versionLabel]
-			if !ok {
-				errChan <- fmt.Errorf("For tag %s: version label not found: %s", tag, versionLabel)
-				return
-			}
-			err = filterDockerTagBySemver(filtered, opts, threshold, tag, tagVersion)
-			if err != nil {
-				errChan <- fmt.Errorf("Error filtering tags: %w", err)
-				return
+			if opts.filterOpts.VersionLabel.Present() {
+				// If there is a version label threshold, then filter by the version label
+				versionLabel := opts.filterOpts.VersionLabel.Value()
+				tagVersion, ok := imgInspect.Labels[versionLabel]
+				if !ok {
+					errChan <- fmt.Errorf("For tag %s: version label not found: %s", tag, versionLabel)
+					return
+				}
+				err = filterDockerTagBySemver(filtered, opts, versionThreshold, tag, tagVersion)
+				if err != nil {
+					errChan <- fmt.Errorf("For tag %s: error filtering: %w", tag, err)
+					return
+				}
+			} else {
+				// If there is a time threshold, then filter by the created date
+				timeThreshold, err := time.Parse(time.RFC3339, opts.filterOpts.BeforeTime.Value())
+				if err != nil {
+					errChan <- fmt.Errorf("Error parsing time threshold for filtering: %w", err)
+					return
+				}
+				err = filterDockerTagByDate(filtered, opts, timeThreshold, tag, *imgInspect.Created)
+				if err != nil {
+					errChan <- fmt.Errorf("For tag %s: error filtering: %w", tag, err)
+					return
+				}
 			}
 
 			// If successful, then signal completion
@@ -357,7 +388,7 @@ func filterDockerTagsByLabelSemver(ctx context.Context, sys *types.SystemContext
 
 	// Return the filtered tags, and an error summary if any errors occurred
 	if numErrors > 0 {
-		return filtered, fmt.Errorf("Encountered %d errors while filtering tags by label semver", numErrors)
+		return filtered, fmt.Errorf("Encountered %d errors while filtering tags by inspect metadata", numErrors)
 	}
 	return filtered, nil
 }
@@ -367,8 +398,8 @@ func filterDockerTags(ctx context.Context, sys *types.SystemContext, opts *tagsO
 		Repository: repositoryName,
 		Tags:       tags,
 	}
-	if opts.filterOpts.VersionLabel.Present() {
-		return filterDockerTagsByLabelSemver(ctx, sys, opts, tagList)
+	if opts.filterOpts.InspectFilterPresent() {
+		return filterDockerTagsByImageMetadata(ctx, sys, opts, tagList)
 	}
 	return filterDockerTagsByTagSemver(opts, tagList)
 }
@@ -378,8 +409,8 @@ func listFilteredDockerTags(ctx context.Context, sys *types.SystemContext, opts 
 	if err != nil {
 		return ``, nil, fmt.Errorf("Error filtering tags by semver: %w", err)
 	}
-	if opts.filterOpts.BeforeVersion.Present() {
-		// Optionally only list tags prior to given semver threshold
+	if opts.filterOpts.BeforeVersion.Present() || opts.filterOpts.BeforeTime.Present() {
+		// Optionally only list tags prior to given semver or date threshold
 		return repositoryName, filtered.ToPrune, nil
 	} else if opts.filterOpts.Invalid.Present() {
 		// Optionally only list tags with invalid semver
